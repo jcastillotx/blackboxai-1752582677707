@@ -1,6 +1,6 @@
 <?php
 /**
- * Database management class
+ * Database management class - Complete with invoices table
  */
 
 if (!defined('ABSPATH')) {
@@ -15,6 +15,11 @@ class SMM_Database {
     
     public function create_tables() {
         global $wpdb;
+        
+        if (!isset($wpdb)) {
+            error_log('SMM Plugin Error: global $wpdb not available.');
+            return false;
+        }
         
         $charset_collate = $wpdb->get_charset_collate();
         
@@ -133,14 +138,48 @@ class SMM_Database {
             KEY client_id (client_id)
         ) $charset_collate;";
         
+        // Invoices table
+        $invoices_table = $wpdb->prefix . 'smm_invoices';
+        $invoices_sql = "CREATE TABLE $invoices_table (
+            id mediumint(9) NOT NULL AUTO_INCREMENT,
+            client_id mediumint(9) NOT NULL,
+            invoice_number varchar(50) NOT NULL,
+            amount decimal(10,2) NOT NULL,
+            status varchar(20) DEFAULT 'pending',
+            due_date date,
+            paid_date date,
+            description text,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP,
+            updated_at datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            KEY client_id (client_id),
+            KEY status (status),
+            UNIQUE KEY invoice_number (invoice_number)
+        ) $charset_collate;";
+        
         require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
         
-        dbDelta($clients_sql);
-        dbDelta($campaigns_sql);
-        dbDelta($posts_sql);
-        dbDelta($analytics_sql);
-        dbDelta($timesheets_sql);
-        dbDelta($messages_sql);
+        // Create tables with error logging
+        $tables = array(
+            'clients' => $clients_sql,
+            'campaigns' => $campaigns_sql,
+            'posts' => $posts_sql,
+            'analytics' => $analytics_sql,
+            'timesheets' => $timesheets_sql,
+            'messages' => $messages_sql,
+            'invoices' => $invoices_sql
+        );
+        
+        foreach ($tables as $table_name => $sql) {
+            $result = dbDelta($sql);
+            if (empty($result)) {
+                error_log("SMM Plugin Error: Failed to create {$table_name} table");
+            } else {
+                error_log("SMM Plugin: Successfully created/updated {$table_name} table");
+            }
+        }
+        
+        return true;
     }
     
     public function get_client_data($client_id) {
@@ -195,5 +234,53 @@ class SMM_Database {
         $sql = "SELECT * FROM $table $where_clause ORDER BY created_at DESC";
         
         return $wpdb->get_results($wpdb->prepare($sql, $params));
+    }
+    
+    public function save_invoice($data) {
+        global $wpdb;
+        $table = $wpdb->prefix . 'smm_invoices';
+        
+        return $wpdb->insert($table, $data);
+    }
+    
+    public function get_invoices($client_id = null, $status = null, $limit = 10) {
+        global $wpdb;
+        $invoices_table = $wpdb->prefix . 'smm_invoices';
+        $clients_table = $wpdb->prefix . 'smm_clients';
+        
+        $where_conditions = array();
+        $params = array();
+        
+        if ($client_id) {
+            $where_conditions[] = "i.client_id = %d";
+            $params[] = $client_id;
+        }
+        
+        if ($status) {
+            $where_conditions[] = "i.status = %s";
+            $params[] = $status;
+        }
+        
+        $where_clause = '';
+        if (!empty($where_conditions)) {
+            $where_clause = 'WHERE ' . implode(' AND ', $where_conditions);
+        }
+        
+        $sql = "SELECT i.*, c.company_name 
+                FROM $invoices_table i 
+                LEFT JOIN $clients_table c ON i.client_id = c.id 
+                $where_clause 
+                ORDER BY i.created_at DESC";
+        
+        if ($limit) {
+            $sql .= " LIMIT %d";
+            $params[] = $limit;
+        }
+        
+        if (!empty($params)) {
+            return $wpdb->get_results($wpdb->prepare($sql, $params));
+        } else {
+            return $wpdb->get_results($sql);
+        }
     }
 }
